@@ -9,16 +9,16 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from evaluation.robot.camera.camera_manager import discover_cameras
+from evaluation.robot.camera.opencv_camera import discover_cameras
 from evaluation.robot.config import CAMERAS
 
 
-def wait_for_change(prev: Dict[int, str], timeout: float = 30.0, interval: float = 0.5) -> Tuple[Dict[int, str], Dict[int, str]]:
+def wait_for_change(func, prev, timeout: float = 30.0, interval: float = 0.5):
     start = time.time()
     while time.time() - start < timeout:
-        cur = discover_cameras()
+        cur = func()
         if cur != prev:
-            return cur, cur
+            return cur
         time.sleep(interval)
     raise TimeoutError("未检测到新设备变化，请重试。")
 
@@ -46,18 +46,17 @@ def main():
     parser.add_argument("--timeout", type=float, default=30.0, help="等待插拔的超时时间（秒）。")
     args = parser.parse_args()
 
-    baseline = discover_cameras()
-    print("当前已检测到的设备 (index -> serial):", baseline)
-
     results = {}
-    prev = baseline
+    prev_usb = discover_cameras()
+    print("当前 USB 设备 (index -> serial):", prev_usb)
+
     for name in args.names:
         input(f"\n准备识别 {name}。请拔掉并重新插上该相机，插好后按回车继续检测...")
         try:
-            cur, _ = wait_for_change(prev, timeout=args.timeout)
-            idx, serial = pick_new_device(prev, cur)
+            cur_usb = wait_for_change(discover_cameras, prev_usb, timeout=args.timeout)
+            idx, serial = pick_new_device(prev_usb, cur_usb)
             results[name] = {"device_index": idx, "serial": serial}
-            prev = cur
+            prev_usb = cur_usb
             print(f"检测到 {name}: /dev/video{idx}, serial='{serial}'")
         except Exception as exc:  # noqa: BLE001
             print(f"[{name}] 识别失败: {exc}")

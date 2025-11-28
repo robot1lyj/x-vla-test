@@ -1,14 +1,15 @@
 # ROS-free SoftFold-Agilex 说明
 
-- 目录结构：`camera/` (OpenCV 采集)、`piper/` (Piper 控制 + IK)、`run_client.py` (抓图→HTTP 推理→下发)。
-- 依赖：`opencv-python`, `requests`, `pinocchio`, `casadi`, `piper_sdk`（供应商 SDK），Python 3.10 推荐。
+- 目录结构：`camera/` (OpenCV / RealSense 采集)、`piper/` (Piper 控制 + IK)、`run_client.py` (抓图→HTTP 推理→下发)。
+- 依赖：`opencv-python`, `requests`, `pinocchio`, `casadi`, `piper_sdk`（供应商 SDK），Python 3.10 推荐；若 `cam_high` 用 RealSense/D435i，需安装 `pyrealsense2`。
 
 ## 相机
-- 串口号获取：
-  - 查看设备：`ls /dev/video*`
-  - 读取序列号：`cat /sys/class/video4linux/videoX/device/serial` 或 `udevadm info /dev/videoX | grep ID_SERIAL_SHORT`
-  - 交互式识别（推荐）：`python evaluation/robot/camera/identify.py` 按提示拔插 `cam_high/cam_left_wrist/cam_right_wrist`，自动输出 `serial_hint/device_index` 建议值。
-- 配置分辨率/帧率：修改 `evaluation/robot/config.py` 中 `CAMERAS`，每个相机的 `device_index`/`serial_hint`、`width`、`height`、`fps`。
+- 驱动选择：`config.py` 的 `CAMERAS` 每路可设 `driver`，`opencv` 走 `/dev/video*`，`realsense` 走 `pyrealsense2`（如 D435i）。
+- 串口号/序列号获取：
+  - OpenCV 相机：`ls /dev/video*`，`cat /sys/class/video4linux/videoX/device/serial`，或 `udevadm info /dev/videoX | grep ID_SERIAL_SHORT`
+  - RealSense：`rs-enumerate-devices` 查看序列号（若只有一台可留空自动匹配）。
+- 交互式识别（推荐）：`python evaluation/robot/camera/identify.py` 按提示拔插 `cam_high/cam_left_wrist/cam_right_wrist`，自动输出 `serial_hint/device_index` 建议值（仅针对 OpenCV 相机；RealSense 请填序列号或留空）。
+- 配置分辨率/帧率：修改 `evaluation/robot/config.py` 中 `CAMERAS`，设置 `driver/serial_hint/device_index/width/height/fps`。
 - 预览测试：`python evaluation/robot/camera/preview.py --duration 10`，按 `q` 退出；拼接显示三路视角。
 
 ## 机械臂（Piper）

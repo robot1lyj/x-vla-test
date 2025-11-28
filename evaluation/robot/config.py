@@ -8,10 +8,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # Camera mapping: fill either serial substring or device index.
+# driver: "opencv" (VideoCapture) or "realsense" (pyrealsense2). cam_high 默认 RealSense D435i。
 CAMERAS = {
-    "cam_high": {"serial_hint": "", "device_index": 0, "width": 640, "height": 480, "fps": 30},
-    "cam_left_wrist": {"serial_hint": "", "device_index": 1, "width": 640, "height": 480, "fps": 30},
-    "cam_right_wrist": {"serial_hint": "", "device_index": 2, "width": 640, "height": 480, "fps": 30},
+    "cam_high": {"driver": "realsense", "serial_hint": "", "device_index": -1, "width": 640, "height": 480, "fps": 30},
+    "cam_left_wrist": {"driver": "opencv", "serial_hint": "", "device_index": 1, "width": 640, "height": 480, "fps": 30},
+    "cam_right_wrist": {"driver": "opencv", "serial_hint": "", "device_index": 2, "width": 640, "height": 480, "fps": 30},
 }
 
 # CAN bus ports for dual arms. If你的系统网络接口名就是 can_left/can_right，直接填同名。
