@@ -112,7 +112,10 @@ class PiperController:
 
     def move_pose(self, xyzrpy: np.ndarray, gripper: float = 0.0):
         target = xyzrpy_to_se3(xyzrpy)
-        q_init = self.last_q
+        q_init = None
+        if self.last_q is not None:
+            nq = self.ik.reduced_robot.model.nq
+            q_init = self.last_q[:nq]
         q, success, collision = self.ik.solve(target, q_init=q_init)
         if not success:
             raise RuntimeError("IK failed.")
