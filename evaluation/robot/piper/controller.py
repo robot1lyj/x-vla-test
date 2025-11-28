@@ -85,10 +85,18 @@ class PiperController:
     def move_joint(self, joints_rad: np.ndarray, gripper: float = 0.0):
         if not self.enabled:
             raise RuntimeError("Arm not enabled. Call enable() first.")
+        lower = self.ik.reduced_robot.model.lowerPositionLimit
+        upper = self.ik.reduced_robot.model.upperPositionLimit
+        # If gripper present, pad limits with +/-inf to match joints_rad length.
+        if joints_rad.shape[0] > lower.shape[0]:
+            pad = joints_rad.shape[0] - lower.shape[0]
+            lower = np.concatenate([lower, -np.inf * np.ones(pad)])
+            upper = np.concatenate([upper, np.inf * np.ones(pad)])
+
         joints_rad = clamp_to_limits(
             joints_rad,
-            self.ik.reduced_robot.model.lowerPositionLimit,
-            self.ik.reduced_robot.model.upperPositionLimit,
+            lower,
+            upper,
             margin=MOTION["joint_limits_margin"],
         )
         if self.last_q is not None:
