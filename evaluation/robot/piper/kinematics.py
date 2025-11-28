@@ -30,6 +30,7 @@ class ArmIK:
         max_iter: int = 50,
         tol: float = 1e-4,
         jump_threshold_rad: float = 30.0 / 180.0 * 3.1415926,
+        trust_region: Optional[float] = None,
     ):
         self.urdf_path = urdf_path
         self.jump_threshold_rad = jump_threshold_rad
@@ -89,6 +90,16 @@ class ArmIK:
             )
         )
         self.opti.minimize(weight_pose * totalcost + weight_reg * regularization + smooth_weight * smooth_cost)
+        # Optional trust region around seed (set per solve).
+        self.trust_region = trust_region
+        if trust_region is not None:
+            self.param_step_lower = self.opti.parameter(self.reduced_robot.model.nq)
+            self.param_step_upper = self.opti.parameter(self.reduced_robot.model.nq)
+            self.opti.subject_to(self.param_step_lower <= self.var_q)
+            self.opti.subject_to(self.var_q <= self.param_step_upper)
+        else:
+            self.param_step_lower = None
+            self.param_step_upper = None
         opts = {
             "ipopt": {"print_level": 0, "max_iter": max_iter, "tol": tol},
             "print_time": False,
@@ -100,16 +111,33 @@ class ArmIK:
         if q_init is None:
             q_init = self.init_data if self.init_data is not None else np.zeros(self.reduced_robot.model.nq)
 
-        self.opti.set_initial(self.var_q, q_init)
-        self.opti.set_value(self.param_tf, target_pose)
-        self.opti.set_value(self.var_q_last, q_init)
+        def _try(q_guess: np.ndarray):
+            q_guess = np.clip(q_guess, self.reduced_robot.model.lowerPositionLimit, self.reduced_robot.model.upperPositionLimit)
+            self.opti.set_initial(self.var_q, q_guess)
+            self.opti.set_value(self.param_tf, target_pose)
+            self.opti.set_value(self.var_q_last, q_guess)
+            if self.trust_region is not None and self.param_step_lower is not None and self.param_step_upper is not None:
+                lower = np.maximum(self.reduced_robot.model.lowerPositionLimit, q_guess - self.trust_region)
+                upper = np.minimum(self.reduced_robot.model.upperPositionLimit, q_guess + self.trust_region)
+                self.opti.set_value(self.param_step_lower, lower)
+                self.opti.set_value(self.param_step_upper, upper)
+            sol = self.opti.solve_limited()
+            return self.opti.value(self.var_q)
 
         try:
-            sol = self.opti.solve_limited()
-            sol_q = self.opti.value(self.var_q)
+            sol_q = _try(q_init)
         except Exception as exc:
-            logging.error("IK solve failed: %s", exc)
-            return q_init, False, True
+            logging.error("IK solve failed: %s. Retrying from zeros.", exc)
+            try:
+                sol_q = _try(np.zeros(self.reduced_robot.model.nq))
+            except Exception as exc2:
+                logging.error("IK retry from zeros also failed: %s. Trying neutral seed.", exc2)
+                try:
+                    neutral = pin.neutral(self.reduced_robot.model)
+                    sol_q = _try(neutral)
+                except Exception as exc3:
+                    logging.error("IK retry from neutral also failed: %s", exc3)
+                    return q_init, False, True
 
         # Jump guard.
         if self.history_data is not None:

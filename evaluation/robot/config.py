@@ -30,6 +30,7 @@ IK = {
     "w_reg": 0.01,
     "smooth_weight": 0.0,
     "jump_threshold_rad": 30.0 / 180.0 * 3.1415926,
+    "trust_region": 0.35,  # optional per-joint step cap (rad); set None to disable
 }
 
 # Inference server.
