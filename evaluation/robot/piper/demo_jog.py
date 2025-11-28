@@ -26,17 +26,16 @@ def main():
     logging.basicConfig(level=logging.INFO)
     ctrl = PiperController(can_port=args.can)
     ctrl.enable()
-    try:
-        logging.info("Homing...")
-        ctrl.home()
-        time.sleep(1.0)
+    logging.info("Homing...")
+    ctrl.home()
+    time.sleep(1.0)
 
-        target = np.array([0.2, 0.0, 0.2, 0.0, 1.57, 0.0])  # x,y,z,roll,pitch,yaw
-        logging.info("Moving to pose %s", target)
-        ctrl.move_pose(target, gripper=0.0)
-        logging.info("Done. Current state: %s", ctrl.get_state())
-    finally:
-        ctrl.disable()
+    target = np.array([0.2, 0.0, 0.2, 0.0, 1.57, 0.0])  # x,y,z,roll,pitch,yaw
+    logging.info("Moving to pose %s", target)
+    ctrl.move_pose(target, gripper=0.0)
+    logging.info("Return to home...")
+    ctrl.home()
+    logging.info("Done. Current state: %s", ctrl.get_state())
 
 
 if __name__ == "__main__":

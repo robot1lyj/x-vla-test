@@ -12,8 +12,8 @@ from scipy.spatial.transform import Rotation as R
 def xyzrpy_to_se3(xyzrpy: np.ndarray) -> np.ndarray:
     """Convert [x, y, z, roll, pitch, yaw] to 4x4 SE3 matrix."""
     assert xyzrpy.shape[-1] == 6
-    q = pin.Quaternion.fromEulerAngles(xyzrpy[3], xyzrpy[4], xyzrpy[5])
-    return pin.SE3(q, np.array(xyzrpy[:3])).homogeneous
+    rot = pin.rpy.rpyToMatrix(xyzrpy[3], xyzrpy[4], xyzrpy[5])
+    return pin.SE3(rot, np.array(xyzrpy[:3])).homogeneous
 
 
 class ArmIK:
