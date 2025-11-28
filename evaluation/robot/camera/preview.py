@@ -18,7 +18,7 @@ from evaluation.robot.camera.camera_manager import CameraManager
 
 def main():
     parser = argparse.ArgumentParser(description="Preview multiple cameras without ROS.")
-    parser.add_argument("--duration", type=float, default=10.0, help="Preview seconds.")
+    parser.add_argument("--duration", type=float, default=100, help="Preview seconds.")
     parser.add_argument("--window", type=str, default="cams", help="OpenCV window name.")
     args = parser.parse_args()
 
