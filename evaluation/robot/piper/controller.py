@@ -4,130 +4,101 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from evaluation.robot.config import IK, MOTION, URDF_PATH
-from evaluation.robot.piper.kinematics import ArmIK, xyzrpy_to_se3
-from evaluation.robot.piper.safety import clamp_to_limits, limit_velocity
-
-try:
-    from piper_sdk import C_PiperInterface
-except ImportError as exc:  # pragma: no cover - hardware dependency
-    raise ImportError("piper_sdk is required to control the Piper arm.") from exc
+from evaluation.robot.config import CONTROL_MODE, IK, MOTION, PIPER, URDF_PATH
+from evaluation.robot.piper.bus import PiperBus
+from evaluation.robot.piper.kinematics import PiperIKSolver
+from evaluation.robot.piper.safety import limit_velocity
 
 
 class PiperController:
-    def __init__(self, can_port: str = "can0"):
-        self.can_port = can_port
-        self.piper = C_PiperInterface(can_name=can_port)
-        self.piper.ConnectPort()
-        self.enabled = False
+    """Piper controller with direct joint commands (SoftFold default)."""
 
-        self.ik = ArmIK(
-            str(URDF_PATH),
-            weight_pose=IK["w_pose"],
-            weight_reg=IK["w_reg"],
-            smooth_weight=IK["smooth_weight"],
-            max_iter=IK["max_iter"],
-            tol=IK["tol"],
-            jump_threshold_rad=IK["jump_threshold_rad"],
+    def __init__(self, can_port: str = "can0"):
+        bus_cfg = PIPER
+        self.bus = PiperBus(
+            can_name=can_port,
+            joint_factor=bus_cfg.get("joint_factor", 180.0 / math.pi * 1000.0),
+            gripper_scale=bus_cfg.get("gripper_scale", 1_000_000.0),
+            gripper_max=bus_cfg.get("gripper_max", 80_000),
+            motion_speed=bus_cfg.get("motion_speed", 100),
         )
+        self.enabled = False
+        self.home_q = np.asarray(bus_cfg.get("home_rad", [0, 0, 0, 0, 0, 0, 0]), dtype=float)
+        self.safe_q = np.asarray(bus_cfg.get("safe_rad", self.home_q), dtype=float)
+
+        self.ik: Optional[PiperIKSolver] = None
+        if CONTROL_MODE == "eef":
+            self.ik = PiperIKSolver(
+                str(URDF_PATH),
+                weight_pose=IK["w_pose"],
+                weight_reg=IK["w_reg"],
+                smooth_weight=IK.get("smooth_weight", 0.0),
+                max_iter=IK["max_iter"],
+                tol=IK["tol"],
+                jump_threshold_rad=IK["jump_threshold_rad"],
+                trust_region=IK.get("trust_region"),
+            )
         self.last_q: Optional[np.ndarray] = None
 
     # ---- Low-level helpers ----
-    @staticmethod
-    def _rad_to_device(rad: float) -> int:
-        factor = 57324.840764  # 1000 * 180 / pi
-        return int(round(rad * factor))
-
-    @staticmethod
-    def _grip_to_device(grip: float) -> int:
-        val = int(round(grip * 1_000_000))
-        return max(0, min(80000, val))
-
     def enable(self):
         if self.enabled:
             return
-        self.piper.EnableArm(7)
-        self.piper.GripperCtrl(0, 1000, 0x01, 0)
+        self.bus.enable()
         self.enabled = True
-        logging.info("Piper enabled on %s", self.can_port)
 
     def disable(self):
-        self.piper.DisableArm(7)
-        self.enabled = False
-        logging.info("Piper disabled on %s", self.can_port)
+        if self.enabled:
+            try:
+                if self.safe_q is not None and self.safe_q.size >= 6:
+                    self.move_joint(self.safe_q, gripper=float(self.safe_q[-1]) if self.safe_q.size > 6 else 0.0)
+            except Exception as exc:  # pylint: disable=broad-except
+                logging.warning("Failed to move to safe pose before disable: %s", exc)
+            self.bus.disable()
+            self.enabled = False
 
     # ---- State ----
     def get_joint_state(self) -> np.ndarray:
-        msg = self.piper.GetArmJointMsgs().joint_state
-        factor = 0.017444  # radians per milli-degree
-        joints = np.array(
-            [
-                msg.joint_1 / 1000 * factor,
-                msg.joint_2 / 1000 * factor,
-                msg.joint_3 / 1000 * factor,
-                msg.joint_4 / 1000 * factor,
-                msg.joint_5 / 1000 * factor,
-                msg.joint_6 / 1000 * factor,
-                self.piper.GetArmGripperMsgs().gripper_state.grippers_angle / 1_000_000,
-            ],
-            dtype=float,
-        )
-        return joints
+        return self.bus.read_joints()
 
     def get_eef_pose(self) -> np.ndarray:
-        end = self.piper.GetArmEndPoseMsgs().end_pose
-        pos = np.array([end.X_axis, end.Y_axis, end.Z_axis], dtype=float) / 1_000_000.0
-        rpy = np.array([end.RX_axis, end.RY_axis, end.RZ_axis], dtype=float) / 1000.0
-        rpy = np.deg2rad(rpy)
-        return np.concatenate([pos, rpy], axis=0)
+        eef = self.bus.read_eef()
+        if eef is not None:
+            return eef
+        if self.ik is not None:
+            q = self.get_joint_state()[: self.ik.reduced_robot.model.nq]
+            return self.ik.forward_k(q)
+        return None
 
     # ---- Commands ----
-    def move_joint(self, joints_rad: np.ndarray, gripper: float = 0.0):
+    def move_joint(self, joints_rad: np.ndarray, gripper: Optional[float] = None):
         if not self.enabled:
             raise RuntimeError("Arm not enabled. Call enable() first.")
-        lower = self.ik.reduced_robot.model.lowerPositionLimit
-        upper = self.ik.reduced_robot.model.upperPositionLimit
-        # If gripper present, pad limits with +/-inf to match joints_rad length.
-        if joints_rad.shape[0] > lower.shape[0]:
-            pad = joints_rad.shape[0] - lower.shape[0]
-            lower = np.concatenate([lower, -np.inf * np.ones(pad)])
-            upper = np.concatenate([upper, np.inf * np.ones(pad)])
-
-        joints_rad = clamp_to_limits(
-            joints_rad,
-            lower,
-            upper,
-            margin=MOTION["joint_limits_margin"],
-        )
         if self.last_q is not None:
-            joints_rad, clipped = limit_velocity(self.last_q, joints_rad, max_step=math.radians(10))
+            joints_rad, clipped = limit_velocity(
+                self.last_q,
+                joints_rad,
+                max_step=MOTION.get("max_step_rad", math.radians(10)),
+            )
             if clipped:
                 logging.debug("Joint step limited.")
-        dev = [self._rad_to_device(v) for v in joints_rad[:6]]
-        self.piper.MotionCtrl_2(0x01, 0x01, 100)
-        self.piper.JointCtrl(*dev)
-        self.piper.GripperCtrl(self._grip_to_device(gripper), 1000, 0x01, 0)
-        self.piper.MotionCtrl_2(0x01, 0x01, 100)
+
+        grip = gripper
+        if grip is None and joints_rad.shape[0] > 6:
+            grip = float(joints_rad[6])
+        if grip is None:
+            grip = 0.0
+
+        self.bus.write(joints_rad, gripper=grip)
         self.last_q = joints_rad
 
-    def move_pose(self, xyzrpy: np.ndarray, gripper: float = 0.0):
-        target = xyzrpy_to_se3(xyzrpy)
-        q_init = None
-        if self.last_q is not None:
-            nq = self.ik.reduced_robot.model.nq
-            q_init = self.last_q[:nq]
-        q, success, collision = self.ik.solve(target, q_init=q_init)
-        if not success:
-            raise RuntimeError("IK failed.")
-        if collision:
-            logging.warning("IK solution in collision.")
-        self.move_joint(q, gripper=gripper)
-
     def home(self):
-        zeros = np.zeros(7)
-        self.move_joint(zeros)
+        self.move_joint(self.home_q, gripper=float(self.home_q[-1]) if self.home_q.size > 6 else None)
 
     def get_state(self) -> Dict[str, np.ndarray]:
         q = self.get_joint_state()
-        eef = self.ik.forward_k(q[: self.ik.reduced_robot.model.nq])
+        eef = self.get_eef_pose()
         return {"qpos": q, "eef": eef}
+
+
+__all__ = ["PiperController"]
